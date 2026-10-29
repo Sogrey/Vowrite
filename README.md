@@ -140,4 +140,4 @@ python -m venv .venv
 
 完整需求见 [docs/PRD.md](docs/PRD.md)。
 
-> AI生成
+
