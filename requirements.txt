@@ -1,0 +1,8 @@
+# Vowrite P0 依赖（Python 3.12+）
+keyboard>=0.13.5        # 全局键盘钩子（按住右 Ctrl 触发）
+sounddevice>=0.5.1      # 16kHz 单声道录音
+numpy>=1.26             # 音频缓冲
+faster-whisper>=1.1.0   # 本地 ASR（whisper.cpp 同源，CTranslate2 后端）
+requests>=2.32           # OpenAI 兼容 API 调用（润色 / 云端转写）
+pyperclip>=1.9.0        # 剪贴板写入
+PyAutoGUI>=0.9.54        # 模拟 Ctrl+V 注入

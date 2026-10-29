@@ -1,0 +1,59 @@
+# ============================================================
+# Vowrite P0 配置示例
+# 复制为 config.toml 后按需修改；config.toml 已被 .gitignore 忽略
+# ============================================================
+
+[trigger]
+# 触发键（keyboard 库按键名），按住说话、松开结束
+# 常用：right ctrl / right shift / f9 / f8 / pause …
+key = "right ctrl"
+mode = "hold"                # P0 仅实现 hold（按住说话）
+
+[audio]
+sample_rate = 16000          # Whisper 采样率，勿改
+channels = 1
+min_duration = 0.4           # 秒；低于此时长视为误触忽略
+max_duration = 120           # 秒；达到上限自动收尾
+
+[asr]
+# 引擎：local = 本地 faster-whisper | api = OpenAI 兼容 /audio/transcriptions
+engine = "local"
+# 语音语言："zh" / "en" / "auto"
+language = "zh"
+# 模型下载镜像（huggingface_hub 在 import 时读取；留空则直连官网）
+hf_endpoint = "https://hf-mirror.com"
+
+# ---- local 引擎 ----
+model = "small"              # tiny / base / small / medium / large-v2 / large-v3-turbo
+device = "auto"              # auto = 先试 CUDA（含预热验证），失败回退 CPU | cuda | cpu
+compute_type = "auto"        # auto = cuda→float16 / cpu→int8；也可写 float16 / int8
+# CUDA 运行库目录（Windows 专用；ctranslate2 在转写期才懒加载 cublas/cudnn）
+# 若 CUDA 报 "cublas64_12.dll is not found"，把本机 CUDA 12 库目录填进来，例：
+#   cuda_dll_dirs = ['D:\AI\GPT-SoVITS\venv\Lib\site-packages\torch\lib']
+# 留空则依赖系统 PATH；CUDA 不可用时自动回退 CPU int8
+cuda_dll_dirs = []
+
+# ---- api 引擎（engine="api" 时生效）----
+[asr.api]
+base_url = ""                # 例：https://api.openai.com/v1
+api_key = ""
+model = "whisper-1"          # 例：whisper-1 / gpt-4o-mini-transcribe
+
+[llm]
+# 处理引擎：OpenAI 兼容 /v1/chat/completions
+enabled = true
+# 输出模式：polish = 把说的话转写润色成干净文字（替代打字，默认）
+#           chat  = 口述问题，AI 答案直接落光标（运行时也可用 --mode 临时切换）
+mode = "polish"
+# 指向本地 llama.cpp server，启动示例（端口避开设备上已被占用的端口）：
+#   llama-server.exe -m <你的模型>.gguf -ngl 99 --port 8090
+# 云端示例：https://api.deepseek.com/v1 （model 填 deepseek-chat）
+base_url = "http://127.0.0.1:8090/v1"
+api_key = "sk-no-key"        # llama.cpp 本地服务无需真实 key
+model = "qwen"               # 按实际加载模型名填写
+style = "light"              # light = 清噪不改意 | heavy = 可书面化改写
+timeout = 20                 # 秒；超时降级输出原转写
+
+[inject]
+enabled = true               # false = 只写剪贴板，不模拟粘贴
+pause_ms = 120               # 写剪贴板 → 模拟 Ctrl+V 的间隔（毫秒）
