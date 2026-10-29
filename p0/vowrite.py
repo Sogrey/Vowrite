@@ -47,6 +47,25 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_NAME = "config.toml"
 EXAMPLE_CONFIG_NAME = "config.example.toml"
 
+# GUI 模式（pythonw 无控制台）下设为日志文件路径，log 将同时写入文件
+_LOG_FILE: Optional[str] = None
+
+
+def set_log_file(path) -> None:
+    global _LOG_FILE
+    _LOG_FILE = str(path) if path else None
+
+
+def _write_log_file(line: str) -> None:
+    if not _LOG_FILE:
+        return
+    try:
+        Path(_LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:  # noqa: BLE001 — 日志文件写失败不影响主流程
+        pass
+
 
 def _resolve_example_config() -> Path:
     """在脚本目录及其父目录（项目根）查找 config.example.toml。"""
@@ -84,6 +103,9 @@ def load_config(path: Path) -> dict:
     raw.setdefault("llm", {"enabled": True, "base_url": "http://127.0.0.1:8090/v1",
                            "api_key": "sk-no-key", "model": "qwen",
                            "mode": "polish", "style": "light", "timeout": 20})
+    raw["llm"].setdefault("server", {"enabled": False, "auto_start": False,
+                                     "exe": "", "model": "", "args": "-ngl 99 -c 2048",
+                                     "host": "127.0.0.1", "port": 8090})
     raw.setdefault("inject", {"enabled": True, "pause_ms": 120})
     return raw
 
@@ -96,11 +118,18 @@ _LOCK = threading.Lock()
 
 
 def log(tag: str, msg: str, seconds: Optional[float] = None) -> None:
-    """带时间戳的阶段日志；seconds 非空则附耗时。"""
+    """带时间戳的阶段日志；seconds 非空则附耗时；GUI 模式同时写文件。"""
     t = time.strftime("%H:%M:%S")
     suffix = f" ({seconds:.2f}s)" if seconds is not None else ""
-    with _LOCK:
-        print(f"[{t}] [{tag:<3}] {msg}{suffix}", flush=True)
+    line = f"[{t}] [{tag:<3}] {msg}{suffix}"
+    # pythonw 无控制台时 stdout 为 None，print 可能抛异常——兜住，文件日志优先保命
+    if sys.stdout is not None:
+        try:
+            with _LOCK:
+                print(line, flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+    _write_log_file(line)
 
 
 # --------------------------------------------------------------------------
@@ -229,6 +258,8 @@ class LocalWhisperTranscriber:
         hf_endpoint = asr_cfg.get("hf_endpoint") or ""
         if hf_endpoint:
             os.environ.setdefault("HF_ENDPOINT", hf_endpoint)
+        # Xet 存储协议（cas-server.xethub.hf.co）不支持镜像端点，回退传统 CDN 下载
+        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
         from faster_whisper import WhisperModel
 
@@ -305,7 +336,18 @@ class LocalWhisperTranscriber:
         if self.language and self.language != "auto":
             kwargs["language"] = self.language
         segments, _info = self.model.transcribe(audio, **kwargs)
-        return "".join(seg.text.strip() for seg in segments).strip()
+        parts = []
+        for seg in segments:
+            # 幻觉抑制：whisper 对超短/低置信音频会吐训练分布里的高频长句，
+            # 按置信度（avg_logprob）与无语音概率过滤（正常语音约 -0.3~-0.7）
+            if seg.avg_logprob < -1.0:
+                log("ASR", f"丢弃低置信片段({seg.avg_logprob:.2f}): {seg.text.strip()}")
+                continue
+            if getattr(seg, "no_speech_prob", 0.0) > 0.6 and seg.avg_logprob < -0.8:
+                log("ASR", f"丢弃无语音片段(prob={seg.no_speech_prob:.2f}): {seg.text.strip()}")
+                continue
+            parts.append(seg.text.strip())
+        return "".join(parts).strip()
 
 
 class ApiTranscriber:
@@ -407,6 +449,13 @@ CHAT_PROMPT = (
     "直接输出答案，不要解释性框架，不要加引号。"
 )
 
+# 超短输入透传阈值：不超过此长度且不含口水词时，无需润色直接输出，
+# 规避弱指令模型对短输入的“模式续写”风险
+SHORT_INPUT_LIMIT = 6
+FILLER_WORDS = ("嗯", "呃", "啊", "那个", "就是说", "然后呢", "等一下")
+# few-shot 示例的特征片段：polish 输出中出现而源文本没有 → 判定模型被示例吸附
+FEWSHOT_FINGERPRINTS = ("去吃个饭", "有空的话", "梳理需求", "完成设计稿", "开发上线")
+
 
 class Polisher:
     """OpenAI 兼容 /chat/completions 后处理器；失败时降级返回原文。
@@ -439,10 +488,33 @@ class Polisher:
             return 0.4, 3
         return 0.2, 2
 
+    def _guard_polish_output(self, source: str, out: str) -> Optional[str]:
+        """polish 模式输出守卫：拦截模型被 few-shot 示例吸附/续写的异常输出。
+
+        返回 None 表示拒绝该输出（调用方降级返回原文）。
+        """
+        # 1) 指纹守卫：输出出现源文本中完全没有的示例特征片段
+        for fp in FEWSHOT_FINGERPRINTS:
+            if fp in out and fp not in source:
+                log("LLM", f"输出守卫拦截：出现示例指纹「{fp}」，降级原文")
+                return None
+        # 2) 长度守卫：清理只删不加；标点增量随长度放宽（20% + 6 字余量）
+        allowance = 6 + max(0, int(len(source) * 0.2))
+        if len(out) > len(source) + allowance:
+            log("LLM", f"输出守卫拦截：输出({len(out)})远长于输入({len(source)})，降级原文")
+            return None
+        return out
+
     def polish(self, text: str) -> str:
         """按模式后处理文本（polish=清理润色，chat=生成答案）。"""
         if not self.enabled:
             return text
+        # 超短输入旁路：无需润色直接透传，不调用 LLM
+        stripped = text.strip()
+        if (self.mode == "polish" and 0 < len(stripped) <= SHORT_INPUT_LIMIT
+                and not any(w in stripped for w in FILLER_WORDS)):
+            log("LLM", f"短输入透传（{len(stripped)} 字，无需润色）")
+            return stripped
         system = self._system_prompt()
         temperature, ratio = self._sampler()
         max_tokens = max(256, len(text) * ratio + 256)
@@ -469,6 +541,12 @@ class Polisher:
             # 去掉部分模型爱加的包裹引号
             if len(out) >= 2 and out[0] in "“\"'" and out[-1] in "”\"'":
                 out = out[1:-1].strip()
+            # polish 输出守卫：拦截被示例吸附的异常输出
+            if self.mode == "polish" and out:
+                guarded = self._guard_polish_output(text, out)
+                if guarded is None:
+                    return text
+                out = guarded
             log("LLM", f"处理完成 (mode={self.mode}, style={self.style})",
                 time.perf_counter() - t0)
             return out or text
@@ -630,6 +708,9 @@ class Vowrite:
             t0 = time.perf_counter()
             raw = self.transcriber.transcribe(audio)
             log("ASR", f"转写: {raw or '（空）'}", time.perf_counter() - t0)
+            if not raw:
+                log("TRG", "未识别到有效语音内容（可能被置信度过滤），本次跳过")
+                return
 
             polished = self.polisher.polish(raw)
             if polished != raw and raw:
@@ -650,26 +731,54 @@ class Vowrite:
 
     # -- 常驻监听 ------------------------------------------------------------
 
-    def run(self) -> None:
+    def start(self) -> None:
+        """安装键盘钩子开始监听（GUI/嵌入式用）；幂等。"""
+        if getattr(self, "_hook_installed", False):
+            return
         import keyboard
 
         if self.polisher.mode == "chat":
             mode_desc = "口述问题，AI 答案落光标"
         else:
             mode_desc = "把你说的话打成干净文字（替代打字）"
-        log("APP", f"Vowrite v{__version__} 常驻监听中 [mode={self.polisher.mode}] — "
-                  f"按住 [{self.trigger_key}] 说话，{mode_desc}；Ctrl+C 退出")
+        log("APP", f"Vowrite v{__version__} 监听中 [mode={self.polisher.mode}] — "
+                  f"按住 [{self.trigger_key}] 说话，{mode_desc}")
         keyboard.hook(self._on_keyboard_event, suppress=False)
+        self._hook_installed = True
+
+    def stop(self) -> None:
+        """卸载键盘钩子停止监听；幂等。"""
+        if not getattr(self, "_hook_installed", False):
+            return
+        try:
+            import keyboard
+
+            keyboard.unhook_all()
+        except Exception:  # noqa: BLE001
+            pass
+        self._hook_installed = False
+
+    def apply_runtime_config(self) -> None:
+        """把实例属性与当前配置同步（设置窗热更新后调用，不重建引擎）。"""
+        self.trigger_key = str(self.cfg["trigger"]["key"]).strip().lower()
+        self.polisher.style = self.cfg["llm"].get("style", self.polisher.style)
+        self.polisher.mode = self.cfg["llm"].get("mode", self.polisher.mode)
+        self.polisher.timeout = float(self.cfg["llm"].get("timeout", self.polisher.timeout))
+        self.injector.enabled = bool(self.cfg["inject"].get("enabled", True))
+        self.injector.pause_ms = float(self.cfg["inject"].get("pause_ms", 120))
+        log("APP", f"热更新生效：trigger={self.trigger_key}, mode={self.polisher.mode}, "
+                  f"style={self.polisher.style}")
+
+    def run(self) -> None:
+        """CLI 常驻入口：start + 阻塞等 Ctrl+C。"""
+        self.start()
         try:
             while True:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             log("APP", "收到退出信号，清理…")
         finally:
-            try:
-                keyboard.unhook_all()
-            except Exception:  # noqa: BLE001
-                pass
+            self.stop()
 
     def _on_keyboard_event(self, event) -> None:
         etype = getattr(event, "event_type", "")
