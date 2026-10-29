@@ -24,9 +24,13 @@ language = "zh"
 hf_endpoint = "https://hf-mirror.com"
 
 # ---- local 引擎 ----
-model = "small"              # tiny / base / small / medium / large-v2 / large-v3-turbo
+# 模型可为 HF 模型名（tiny/base/small/medium/large-v3-turbo，首次联网下载）
+# 或本地 CT2 模型目录路径（推荐，免去下载）：
+#   model = 'D:\AI\models\faster-whisper-large-v3-turbo'
+# 中文质量推荐 large-v3-turbo（约 1.6GB），国内从 ModelScope 下载远快于 hf-mirror
+model = "small"
 device = "auto"              # auto = 先试 CUDA（含预热验证），失败回退 CPU | cuda | cpu
-compute_type = "auto"        # auto = cuda→float16 / cpu→int8；也可写 float16 / int8
+compute_type = "auto"        # auto = cuda→float16 / cpu→int8；GPU 用 float16 免转换，CPU 用 int8
 # CUDA 运行库目录（Windows 专用；ctranslate2 在转写期才懒加载 cublas/cudnn）
 # 若 CUDA 报 "cublas64_12.dll is not found"，把本机 CUDA 12 库目录填进来，例：
 #   cuda_dll_dirs = ['D:\AI\GPT-SoVITS\venv\Lib\site-packages\torch\lib']
@@ -53,6 +57,16 @@ api_key = "sk-no-key"        # llama.cpp 本地服务无需真实 key
 model = "qwen"               # 按实际加载模型名填写
 style = "light"              # light = 清噪不改意 | heavy = 可书面化改写
 timeout = 20                 # 秒；超时降级输出原转写
+
+# ---- llama-server 托管（GUI 托盘一键启停/自动拉起；按本机环境填写）----
+[llm.server]
+enabled = false              # true = GUI 托盘菜单提供 LLM 服务启停
+auto_start = false           # true = GUI 启动时若端口无服务自动拉起
+exe = ''                     # 例：D:\AI\llama-b9196-bin-win-cuda-13.1-x64\llama-server.exe
+model = ''                   # 例：D:\AI\models\Qwen2.5-7B-Instruct-Q4_K_M.gguf
+args = "-ngl 99 -c 2048"     # 附加启动参数（GPU 层数/上下文长度等）
+host = "127.0.0.1"
+port = 8090                  # 需与上方 base_url 端口一致
 
 [inject]
 enabled = true               # false = 只写剪贴板，不模拟粘贴
