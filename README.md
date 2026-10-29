@@ -2,17 +2,17 @@
 
 # Vowrite（述写）
 
-> \*\*Speak to Write\*\*
+> **Speak to Write**
 
 **按住快捷键口述，AI 实时转写并润色，文字直接输出到当前光标位置，无需切换窗口。**
 
-\[!\[Python](https://img.shields.io/badge/python-3.12%2B-blue)]()
-\[!\[Stage](https://img.shields.io/badge/stage-P0%20prototype-orange)]()
-\[!\[Platform](https://img.shields.io/badge/platform-Windows-blue)]()
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)]()
+[![Stage](https://img.shields.io/badge/stage-P0%20prototype-orange)]()
+[![Platform](https://img.shields.io/badge/platform-Windows-blue)]()
 
 </div>
 
-\---
+---
 
 Vowrite 是一款全局语音输入工具。按住快捷键口述，AI 将你的语音实时转为文字并自动润色，文字直接输出到当前光标位置，无需切换窗口。解放双手，让口述即书写。
 
@@ -82,7 +82,7 @@ python -m venv .venv
 
 > LLM 处理默认指向本地 llama.cpp server（`http://127.0.0.1:8090/v1`），先启动它效果最佳：
 > ```
-> llama-server.exe -m Qwen2.5-7B-Instruct-Q4\_K\_M.gguf -ngl 99 --port 8090
+> llama-server.exe -m Qwen2.5-7B-Instruct-Q4_K_M.gguf -ngl 99 --port 8090
 > ```
 > 没启动也不影响使用——处理会自动降级为输出原始转写。也可在 `config.toml` 指向云端 API（DeepSeek / Qwen 等）。
 >
@@ -97,7 +97,7 @@ python -m venv .venv
 |`python p0\vowrite.py --message "嗯那个我在想等下要不要吃饭"`|跳过录音，直接测润色+注入|
 |`python p0\vowrite.py --no-inject`|只打印/写剪贴板，不模拟粘贴（安全模式）|
 |`python p0\vowrite.py --style heavy`|临时用书面化强度润色|
-|`python p0\vowrite.py --self-test \[--full]`|自检 / 完整链路自检|
+|`python p0\vowrite.py --self-test [--full]`|自检 / 完整链路自检|
 
 ## 配置
 
@@ -105,15 +105,15 @@ python -m venv .venv
 
 |配置段|关键项|说明|
 |-|-|-|
-|`\[trigger]`|`key`|触发键（keyboard 库按键名）：`right ctrl` / `f9` / `right shift`…|
-|`\[audio]`|`min\_duration` / `max\_duration`|误触过滤 / 最长录音保护（秒）|
-|`\[asr]`|`engine`|`local`（faster-whisper）或 `api`（OpenAI 兼容转写）|
+|`[trigger]`|`key`|触发键（keyboard 库按键名）：`right ctrl` / `f9` / `right shift`…|
+|`[audio]`|`min_duration` / `max_duration`|误触过滤 / 最长录音保护（秒）|
+|`[asr]`|`engine`|`local`（faster-whisper）或 `api`（OpenAI 兼容转写）|
 ||`model`|`tiny` / `base` / `small` / `medium` / `large-v3-turbo`|
 ||`device`|`auto`（CUDA→CPU 回退）/ `cuda` / `cpu`|
-||`hf\_endpoint`|模型下载镜像，默认 `https://hf-mirror.com`（国内网络）|
-|`\[llm]`|`mode`|输出模式：`polish`（转写润色，默认）/ `chat`（口述问答落光标）|
-||`base\_url` / `model` / `style`|OpenAI 兼容接口；`style` 为 `light` / `heavy`|
-|`\[inject]`|`enabled` / `pause\_ms`|注入开关；写剪贴板→粘贴的间隔|
+||`hf_endpoint`|模型下载镜像，默认 `https://hf-mirror.com`（国内网络）|
+|`[llm]`|`mode`|输出模式：`polish`（转写润色，默认）/ `chat`（口述问答落光标）|
+||`base_url` / `model` / `style`|OpenAI 兼容接口；`style` 为 `light` / `heavy`|
+|`[inject]`|`enabled` / `pause_ms`|注入开关；写剪贴板→粘贴的间隔|
 
 ## 已知边界
 
@@ -140,3 +140,4 @@ python -m venv .venv
 
 完整需求见 [docs/PRD.md](docs/PRD.md)。
 
+> AI生成
