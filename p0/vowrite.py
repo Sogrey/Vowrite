@@ -217,6 +217,33 @@ class Recorder:
 # 转写引擎
 # --------------------------------------------------------------------------
 
+# whisper 已知高频幻觉短语（训练数据里的频道水印/字幕组文案/片头片尾），命中即判幻觉丢弃
+# 可通过 config [asr] hallucination_fingerprints 追加自定义短语
+HALLUCINATION_FINGERPRINTS = (
+    "优优独播", "独播剧场", "yoyo television", "字幕由", "字幕制作", "字幕提供",
+    "字幕志愿者", "听译", "校对", "时间轴", "仅供学习", "禁止商用",
+    "明镜需要您的支持", "收看订阅明镜", "欢迎收看订阅",
+    "follow us", "please subscribe", "subscribe to", "thank you for watching",
+    "thanks for watching", "enjoy the video", "like and subscribe",
+    "谢谢观看", "请订阅", "关注我们", "百度百科", "维基百科",
+    "amara.org", "opensubtitles", "原始发布",
+)
+# 正常人声速极限（字/秒）：中文播音峰值约 8，超过 12 必为幻觉
+MAX_SPEECH_RATE = 12.0
+
+
+def _hallucination_check(text: str, seg, fingerprints: tuple) -> tuple:
+    """返回 (是否幻觉, 原因)。指纹命中或语速超生理极限判幻觉。"""
+    low = text.lower()
+    for fp in fingerprints:
+        if fp in low:
+            return True, f"命中幻觉指纹「{fp}」"
+    span = max(0.3, float(getattr(seg, "end", 1.0)) - float(getattr(seg, "start", 0.0)))
+    rate = len(text) / span
+    if rate > MAX_SPEECH_RATE:
+        return True, f"语速异常({rate:.1f}字/秒, 时长{span:.1f}s)"
+    return False, ""
+
 
 def _inject_cuda_dll_dirs(asr_cfg: dict) -> list:
     """把 CUDA 运行库目录加入进程 DLL 搜索路径。
@@ -265,6 +292,10 @@ class LocalWhisperTranscriber:
 
         self._asr_cfg = asr_cfg
         self.language: str = asr_cfg.get("language", "zh")
+        # 用户自定义幻觉短语（config [asr] hallucination_fingerprints）合并内置清单
+        extra = asr_cfg.get("hallucination_fingerprints") or []
+        self.fingerprints = tuple(HALLUCINATION_FINGERPRINTS) + tuple(
+            str(x).strip().lower() for x in extra if str(x).strip())
         model_size: str = asr_cfg.get("model", "small")
         device: str = asr_cfg.get("device", "auto")
         compute_type: str = asr_cfg.get("compute_type", "auto")
@@ -338,15 +369,21 @@ class LocalWhisperTranscriber:
         segments, _info = self.model.transcribe(audio, **kwargs)
         parts = []
         for seg in segments:
-            # 幻觉抑制：whisper 对超短/低置信音频会吐训练分布里的高频长句，
-            # 按置信度（avg_logprob）与无语音概率过滤（正常语音约 -0.3~-0.7）
-            if seg.avg_logprob < -1.0:
-                log("ASR", f"丢弃低置信片段({seg.avg_logprob:.2f}): {seg.text.strip()}")
+            text = seg.text.strip()
+            # 幻觉抑制①：置信度（whisper 对超短/低置信音频会吐训练分布里的高频长句）
+            # 阈值 -1.25：低于此判噪声；超短真语音（如单字应答）logprob 天然偏低，不宜过紧
+            if seg.avg_logprob < -1.25:
+                log("ASR", f"丢弃低置信片段({seg.avg_logprob:.2f}): {text}")
                 continue
             if getattr(seg, "no_speech_prob", 0.0) > 0.6 and seg.avg_logprob < -0.8:
-                log("ASR", f"丢弃无语音片段(prob={seg.no_speech_prob:.2f}): {seg.text.strip()}")
+                log("ASR", f"丢弃无语音片段(prob={seg.no_speech_prob:.2f}): {text}")
                 continue
-            parts.append(seg.text.strip())
+            # 幻觉抑制②：已知幻觉短语指纹 + 语速超生理极限
+            bad, reason = _hallucination_check(text, seg, self.fingerprints)
+            if bad:
+                log("ASR", f"丢弃幻觉片段({reason}): {text}")
+                continue
+            parts.append(text)
         return "".join(parts).strip()
 
 
@@ -460,9 +497,10 @@ FEWSHOT_FINGERPRINTS = ("去吃个饭", "有空的话", "梳理需求", "完成�
 class Polisher:
     """OpenAI 兼容 /chat/completions 后处理器；失败时降级返回原文。
 
-    两种模式（mode）：
+    三种模式（mode）：
     - polish：转写清理/润色（把说的话打成干净文字，替代打字）
     - chat：口述问答（说问题，AI 答案落光标）
+    - raw：纯转写（LLM 零参与，识别什么落什么，零幻觉零延迟）
     """
 
     def __init__(self, llm_cfg: dict, style_override: Optional[str] = None,
@@ -506,7 +544,11 @@ class Polisher:
         return out
 
     def polish(self, text: str) -> str:
-        """按模式后处理文本（polish=清理润色，chat=生成答案）。"""
+        """按模式后处理文本（polish=清理润色，chat=生成答案，raw=纯转写透传）。"""
+        if self.mode == "raw":
+            # 纯转写：LLM 零参与，识别出什么落什么（零幻觉零延迟）
+            log("LLM", "raw 模式：纯转写透传，LLM 不参与")
+            return text
         if not self.enabled:
             return text
         # 超短输入旁路：无需润色直接透传，不调用 LLM
@@ -739,6 +781,8 @@ class Vowrite:
 
         if self.polisher.mode == "chat":
             mode_desc = "口述问题，AI 答案落光标"
+        elif self.polisher.mode == "raw":
+            mode_desc = "纯转写落光标（LLM 不参与，零幻觉零延迟）"
         else:
             mode_desc = "把你说的话打成干净文字（替代打字）"
         log("APP", f"Vowrite v{__version__} 监听中 [mode={self.polisher.mode}] — "
@@ -892,8 +936,9 @@ def main() -> int:
                         help="配合 --self-test：加载模型做完整链路验证")
     parser.add_argument("--message", type=str, default=None,
                         help="跳过录音，直接润色并注入给定文本")
-    parser.add_argument("--mode", choices=["polish", "chat"], default=None,
-                        help="临时覆盖输出模式：polish=转写润色（默认，替代打字）| chat=口述问答")
+    parser.add_argument("--mode", choices=["polish", "chat", "raw"], default=None,
+                        help="临时覆盖输出模式：polish=转写润色（默认，替代打字）| "
+                             "chat=口述问答 | raw=纯转写（LLM 不参与）")
     parser.add_argument("--no-inject", action="store_true",
                         help="不模拟粘贴，仅写剪贴板/打印")
     parser.add_argument("--style", choices=["light", "heavy"], default=None,

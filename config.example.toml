@@ -36,6 +36,9 @@ compute_type = "auto"        # auto = cuda→float16 / cpu→int8；GPU 用 floa
 #   cuda_dll_dirs = ['D:\AI\GPT-SoVITS\venv\Lib\site-packages\torch\lib']
 # 留空则依赖系统 PATH；CUDA 不可用时自动回退 CPU int8
 cuda_dll_dirs = []
+# 幻觉短语黑名单（whisper 训练数据污染的频道水印/字幕组文案），命中即丢弃转写片段
+# 内置已含常见指纹（优优独播/明镜/字幕志愿者等）；遇到新幻觉输出把原文片段追加到这里
+hallucination_fingerprints = []
 
 # ---- api 引擎（engine="api" 时生效）----
 [asr.api]
@@ -48,6 +51,7 @@ model = "whisper-1"          # 例：whisper-1 / gpt-4o-mini-transcribe
 enabled = true
 # 输出模式：polish = 把说的话转写润色成干净文字（替代打字，默认）
 #           chat  = 口述问题，AI 答案直接落光标（运行时也可用 --mode 临时切换）
+#           raw   = 纯转写：LLM 零参与，识别什么落什么（零幻觉零延迟，适合念密码/精确内容）
 mode = "polish"
 # 指向本地 llama.cpp server，启动示例（端口避开设备上已被占用的端口）：
 #   llama-server.exe -m <你的模型>.gguf -ngl 99 --port 8090
