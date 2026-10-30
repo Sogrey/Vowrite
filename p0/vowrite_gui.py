@@ -201,7 +201,7 @@ FIELDS = [
         ("trigger.key", "触发键（按住说话）", "text", None),
     ]),
     ("输出模式", [
-        ("llm.mode", "模式", "choice", ["polish", "chat"]),
+        ("llm.mode", "模式", "choice", ["polish", "chat", "raw"]),
         ("llm.style", "润色强度", "choice", ["light", "heavy"]),
     ]),
     ("ASR 语音识别", [
@@ -209,6 +209,7 @@ FIELDS = [
         ("asr.device", "设备", "choice", ["auto", "cpu", "cuda"]),
         ("asr.compute_type", "计算精度", "choice", ["auto", "int8", "float16"]),
         ("asr.language", "语音语言", "choice", ["zh", "en", "auto"]),
+        ("asr.hallucination_fingerprints", "幻觉短语黑名单（逗号分隔，遇新幻觉自行追加）", "csv", None),
     ]),
     ("LLM 处理", [
         ("llm.base_url", "接口地址", "text", None),
@@ -364,8 +365,22 @@ class VowriteGui:
         mode = self.engine.polisher.mode if self.engine else \
             self.cfg["llm"].get("mode", "polish")
         desc = {"polish": "polish · 转写润色（替代打字）",
-                "chat": "chat · 口述问答（答案落光标）"}
+                "chat": "chat · 口述问答（答案落光标）",
+                "raw": "raw · 纯转写（LLM 不参与）"}
         return f"模式：{desc.get(mode, mode)}（点击切换）"
+
+    def _on_toggle_mode(self, *_):
+        if self.engine is None:
+            return
+        # 三态循环：polish → chat → raw → polish
+        order = ["polish", "chat", "raw"]
+        cur = self.engine.polisher.mode
+        new = order[(order.index(cur) + 1) % len(order)] if cur in order else "polish"
+        self.engine.polisher.mode = new
+        self.cfg["llm"]["mode"] = new  # 供下次重启沿用（内存态，不改文件）
+        log("GUI", f"模式切换为 {new}")
+        self.icon.notify(f"输出模式：{new}", "Vowrite")
+        self.icon.update_menu()
 
     def _on_toggle_monitor(self, *_):
         if self.engine is None:
@@ -379,16 +394,6 @@ class VowriteGui:
             self.engine.start()
             self.monitoring = True
             log("GUI", "监听已恢复")
-        self.icon.update_menu()
-
-    def _on_toggle_mode(self, *_):
-        if self.engine is None:
-            return
-        new = "chat" if self.engine.polisher.mode != "chat" else "polish"
-        self.engine.polisher.mode = new
-        self.cfg["llm"]["mode"] = new  # 供下次重启沿用（内存态，不改文件）
-        log("GUI", f"模式切换为 {new}")
-        self.icon.notify(f"输出模式：{new}", "Vowrite")
         self.icon.update_menu()
 
     def _on_toggle_server(self, *_):
@@ -540,6 +545,8 @@ class VowriteGui:
                 row.pack(fill="x", pady=3)
                 ttk.Label(row, text=label, width=24, anchor="e").pack(side="left")
                 value = _get_nested(self.cfg, dotted, "")
+                if kind == "csv":
+                    value = ", ".join(value) if isinstance(value, list) else str(value)
                 var = (tk.BooleanVar(value=bool(value)) if kind == "bool"
                        else tk.StringVar(value=str(value)))
                 if kind == "bool":
@@ -572,6 +579,8 @@ class VowriteGui:
         self.cfg = load_config(CONFIG_PATH)
         for dotted, (var, kind) in self._vars.items():
             value = _get_nested(self.cfg, dotted, "")
+            if kind == "csv":
+                value = ", ".join(value) if isinstance(value, list) else str(value)
             var.set(bool(value) if kind == "bool" else str(value))
         self._autostart_var.set(self._autostart_enabled())
 
@@ -584,6 +593,8 @@ class VowriteGui:
                     value = bool(raw)
                 elif kind == "int":
                     value = int(str(raw).strip() or 0)
+                elif kind == "csv":
+                    value = [x.strip() for x in str(raw).split(",") if x.strip()]
                 else:
                     value = str(raw).strip()
                 _set_nested(doc, dotted, value)
@@ -597,6 +608,12 @@ class VowriteGui:
         if self.engine is not None:
             self.engine.cfg = self.cfg
             self.engine.apply_runtime_config()
+            # 幻觉黑名单属 ASR 段：热更新到引擎实例，无需重启
+            if self.engine.transcriber is not None:
+                extra = self.cfg["asr"].get("hallucination_fingerprints") or []
+                fp = tuple(vowrite.HALLUCINATION_FINGERPRINTS) + tuple(
+                    str(x).strip().lower() for x in extra if str(x).strip())
+                self.engine.transcriber.fingerprints = fp
         self.icon.update_menu()
         messagebox.showinfo(
             "Vowrite",
@@ -619,6 +636,8 @@ class VowriteGui:
                     value = bool(raw)
                 elif kind == "int":
                     value = int(str(raw).strip() or 0)
+                elif kind == "csv":
+                    value = [x.strip() for x in str(raw).split(",") if x.strip()]
                 else:
                     value = str(raw).strip()
                 _set_nested(doc, dotted, value)
