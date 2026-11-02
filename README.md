@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 # Vowrite（述写）
 
@@ -27,6 +27,8 @@ Vowrite 是一款全局语音输入工具。按住快捷键口述，AI 将你的
                                                    失败降级原文本)
 ```
 
+核心实现在 `p0/vowrite/` 包；CLI 入口 `p0/run_vowrite.py`（或 `cd p0 && python -m vowrite`）。延迟埋点写入 `.temp/latency.jsonl`。
+
 ### 两种输出模式（`--mode` 或 `config.toml [llm] mode` 切换）
 
 | 模式 | 做什么 | 适用场景 |
@@ -51,10 +53,10 @@ python -m venv .venv
 .venv\Scripts\pip.exe install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 4) 轻量自检（依赖/配置/麦克风/剪贴板/LLM）
-.venv\Scripts\python.exe p0\vowrite.py --self-test
+.venv\Scripts\python.exe p0\run_vowrite.py --self-test
 
 # 5) 完整自检（首次会下载 ASR 模型，约 460MB，走 hf-mirror）
-.venv\Scripts\python.exe p0\vowrite.py --self-test --full
+.venv\Scripts\python.exe p0\run_vowrite.py --self-test --full
 ```
 
 # 6) 启动方式（二选一）
@@ -75,7 +77,7 @@ python -m venv .venv
 ## CLI 常驻（调试用）
 
 ```powershell
-.venv\Scripts\python.exe p0\vowrite.py
+.venv\Scripts\python.exe p0\run_vowrite.py
 ```
 
 启动后：**按住右 Ctrl 说话 → 松开 → 文字自动落在光标处**。`Ctrl+C` 退出。
@@ -92,12 +94,13 @@ python -m venv .venv
 
 |命令|用途|
 |-|-|
-|`python p0\vowrite.py`|常驻监听（主用法，polish 模式替代打字）|
-|`python p0\vowrite.py --mode chat`|问答模式：说问题，AI 答案落光标|
-|`python p0\vowrite.py --message "嗯那个我在想等下要不要吃饭"`|跳过录音，直接测润色+注入|
-|`python p0\vowrite.py --no-inject`|只打印/写剪贴板，不模拟粘贴（安全模式）|
-|`python p0\vowrite.py --style heavy`|临时用书面化强度润色|
-|`python p0\vowrite.py --self-test [--full]`|自检 / 完整链路自检|
+|`python p0\run_vowrite.py`|常驻监听（主用法，polish 模式替代打字）|
+|`python p0\run_vowrite.py --mode chat`|问答模式：说问题，AI 答案落光标|
+|`python p0\run_vowrite.py --message "嗯那个我在想等下要不要吃饭"`|跳过录音，直接测润色+注入|
+|`python p0\run_vowrite.py --no-inject`|只打印/写剪贴板，不模拟粘贴（安全模式）|
+|`python p0\run_vowrite.py --style heavy`|临时用书面化强度润色|
+|`python p0\run_vowrite.py --self-test [--full]`|自检 / 完整链路自检|
+|`python p0\run_polish_regression.py`|polish 样例回归（≥10 句，默认门槛 80%）|
 
 ## 配置
 
@@ -113,7 +116,7 @@ python -m venv .venv
 ||`hf_endpoint`|模型下载镜像，默认 `https://hf-mirror.com`（国内网络）|
 |`[llm]`|`mode`|输出模式：`polish`（转写润色，默认）/ `chat`（口述问答落光标）|
 ||`base_url` / `model` / `style`|OpenAI 兼容接口；`style` 为 `light` / `heavy`|
-|`[inject]`|`enabled` / `pause_ms`|注入开关；写剪贴板→粘贴的间隔|
+|`[inject]`|`enabled` / `pause_ms` / `restore_clipboard`|注入开关；粘贴间隔；粘贴后是否恢复原剪贴板|
 
 ## 已知边界
 
@@ -138,6 +141,6 @@ python -m venv .venv
 |P2|双引擎回退 / 个人词库 / 修正学习|待启动|
 |P3|流式实时预览 / 选中改写|待启动|
 
-完整需求见 [docs/PRD.md](docs/PRD.md)。
+完整需求见 [docs/PRD.md](docs/PRD.md)；开发计划与阶段门禁见 [docs/dev-plan.md](docs/dev-plan.md)。
 
 
