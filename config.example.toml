@@ -75,3 +75,5 @@ port = 8090                  # 需与上方 base_url 端口一致
 [inject]
 enabled = true               # false = 只写剪贴板，不模拟粘贴
 pause_ms = 120               # 写剪贴板 → 模拟 Ctrl+V 的间隔（毫秒）
+restore_clipboard = true     # 粘贴成功后恢复注入前的剪贴板内容
+restore_delay_ms = 80        # 粘贴后等待多久再恢复（毫秒；过短目标应用可能未读走）

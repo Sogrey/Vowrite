@@ -227,6 +227,8 @@ FIELDS = [
     ("注入", [
         ("inject.enabled", "自动粘贴到光标", "bool", None),
         ("inject.pause_ms", "粘贴前等待（ms）", "int", None),
+        ("inject.restore_clipboard", "粘贴后恢复原剪贴板", "bool", None),
+        ("inject.restore_delay_ms", "恢复前等待（ms）", "int", None),
     ]),
 ]
 
@@ -316,6 +318,7 @@ class VowriteGui:
             self.cfg = cfg
             self.server.refresh_cfg(cfg["llm"])
             engine = Vowrite(cfg)
+            engine.on_notify = lambda title, msg: self.icon.notify(msg, title)
             engine.start()
             self.engine = engine
             self.monitoring = True
@@ -377,10 +380,24 @@ class VowriteGui:
         cur = self.engine.polisher.mode
         new = order[(order.index(cur) + 1) % len(order)] if cur in order else "polish"
         self.engine.polisher.mode = new
-        self.cfg["llm"]["mode"] = new  # 供下次重启沿用（内存态，不改文件）
-        log("GUI", f"模式切换为 {new}")
+        self.cfg["llm"]["mode"] = new
+        if self._persist_config_value("llm.mode", new):
+            log("GUI", f"模式切换为 {new}（已写入配置）")
+        else:
+            log("GUI", f"模式切换为 {new}（写盘失败，仅本次生效）")
         self.icon.notify(f"输出模式：{new}", "Vowrite")
         self.icon.update_menu()
+
+    def _persist_config_value(self, dotted: str, value) -> bool:
+        """把单个配置项写回 config.toml（tomlkit 保留注释）。"""
+        try:
+            doc = tomlkit.parse(CONFIG_PATH.read_text(encoding="utf-8"))
+            _set_nested(doc, dotted, value)
+            CONFIG_PATH.write_text(tomlkit.dumps(doc), encoding="utf-8")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log("ERR", f"写配置失败 ({dotted}): {e}")
+            return False
 
     def _on_toggle_monitor(self, *_):
         if self.engine is None:
@@ -654,9 +671,12 @@ class VowriteGui:
 
     @staticmethod
     def _autostart_command() -> str:
-        bat = PROJECT_ROOT / "start_vowrite.bat"
-        return f'"{bat}"' if bat.exists() else \
-            f'"{PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"}" "{SCRIPT_DIR / "vowrite_gui.py"}"'
+        # bat 在 p0/ 下（与 start_vowrite.bat 同目录），勿指向项目根
+        bat = SCRIPT_DIR / "start_vowrite.bat"
+        if bat.exists():
+            return f'"{bat}"'
+        return (f'"{PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"}" '
+                f'"{SCRIPT_DIR / "vowrite_gui.py"}"')
 
     def _autostart_enabled(self) -> bool:
         try:
